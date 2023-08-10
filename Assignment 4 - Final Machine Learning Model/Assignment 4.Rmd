@@ -1,0 +1,193 @@
+---
+title: "Assignment 4"
+author: "Sriyaank Vadlamani"
+date: "2023-04-30"
+output: pdf_document
+---
+
+```{r echo=FALSE}
+# install.packages("rpart")
+# install.packages("geosphere")
+# install.packages("dplyr")
+# install.packages("rpart.plot")
+# install.packages("stringr")
+# install.packages("moderndive")
+# install.packages("mlr")
+# install.packages("Metrics")
+# install.packages("vip")
+```
+
+```{r}
+library(rpart)
+library(geosphere)
+library(dplyr)
+library(rpart.plot)
+library(stringr)
+library(moderndive)
+library(mlr)
+library(Metrics)
+library(vip)
+library(ggplot2)
+```
+
+```{r}
+set.seed(43023)
+```
+
+# Datasets
+```{r}
+train <- read.csv("train_data.csv")
+test <- read.csv("test_data.csv")
+
+train <- na.omit(train)
+# test <- na.omit(test)
+```
+
+## Adding Distance from JDF and Distance from Broadway columns
+```{r}
+jfk <- matrix(c( -73.7781, 40.6413), nrow=1) # uses latitude and longitude of JFK airport
+broadway <- matrix(c(-73.9747, 40.7908), nrow=1) # uses latitude and longitude of broadway
+
+# The distances are divided by 1000 to avoid scientific notation on decision tree
+train$distance_jfk <- distGeo(jfk, matrix(c(train$longitude, train$latitude), ncol=2)) / 1000 
+test$distance_jfk <- distGeo(jfk, matrix(c(test$longitude, test$latitude), ncol=2)) / 1000
+
+train$distance_broadway <- distGeo(broadway, matrix(c(train$longitude, train$latitude), ncol=2)) / 1000
+test$distance_broadway <- distGeo(broadway, matrix(c(test$longitude, test$latitude), ncol=2))/ 1000
+```
+
+## Adding has_crime column
+```{r}
+crime_data <- read.csv("NYC_Crime_Statistics.csv")
+crime_dict <- with(crime_data, setNames(Zip.Codes, TOTAL.SEVEN.MAJOR.FELONY.OFFENSES))
+
+train$zipcode <- str_sub(train$Location, -20, -16)
+train$zipcode <- as.integer(train$zipcode)
+
+train$has_crime <- ifelse(any(crime_data == train$zipcode), TRUE, FALSE)
+
+train$has_crime <- train$zipcode %in% crime_data$Zip.Codes
+
+test$zipcode <- str_sub(test$Location, -20, -16)
+test$zipcode <- as.integer(test$zipcode)
+
+test$has_crime <- ifelse(any(crime_data == test$zipcode), TRUE, FALSE)
+
+test$has_crime <- test$zipcode %in% crime_data$Zip.Codes
+```
+
+## Test #1: Initial Test
+```{r}
+train1 <- train %>% select(neighbourhood_group, room_type, distance_jfk, distance_broadway, has_crime, price)
+tree1 <- rpart(price ~ ., data = train1, method = "anova")
+rpart.plot(tree1)
+```
+
+## Accuracy Test
+```{r}
+predicted_values <- predict(tree1, train)
+mae(predicted_values, train$price)
+rmse(predicted_values, train$price)
+```
+
+## Feature Importance
+```{r}
+vip(tree1)
+```
+
+## Test #2: More variables
+
+```{r}
+train2 <- train %>% select(neighbourhood_group, floor, room_type, distance_jfk, distance_broadway, minimum_nights, noise.dB., has_crime, price)
+tree2 <- rpart(price ~ ., data = train2, method = "anova")
+rpart.plot(tree2)
+```
+
+## Accuracy Test
+```{r}
+predicted_values <- predict(tree2, train)
+mae(predicted_values, train$price)
+rmse(predicted_values, train$price)
+```
+### Better than before, but maybe hyperparameter tuning the model to find optimal max depth can improve it
+
+## Feature Importance
+```{r}
+vip(tree2)
+```
+
+# Hyperparameter tuning
+
+## Parameter Set
+```{r}
+getParamSet("regr.rpart")
+```
+
+## Make parameter sets
+```{r}
+train3 <- train2
+train3[sapply(train2, is.character)] <- lapply(train3[sapply(train2, is.character)], as.factor)
+train3[sapply(train2, is.logical)] <- lapply(train3[sapply(train2, is.logical)], as.factor)
+
+tree_params <- makeRegrTask(data=train3, target="price")
+
+param_grid <- makeParamSet(makeDiscreteParam("maxdepth", values=1:30), makeNumericParam("cp", lower = 0.001, upper = 0.01))
+```
+
+## Define Grid
+```{r}
+control_grid = makeTuneControlGrid()
+```
+
+## Define Cross Validation
+```{r}
+resample = makeResampleDesc("CV", iters = 3L)
+```
+
+## Define Measure
+```{r}
+measure = list(mlr::mae, mlr::rmse)
+```
+
+## tuneParameters
+```{r}
+# tuneparam <- tuneParams(learner='regr.rpart',
+#  task=tree_params,
+#  resampling = resample,
+#  measures = measure,
+#  par.set=param_grid,
+#  control=control_grid,
+#  show.info = TRUE)
+```
+### Hyperparameter tuning commented out so the pdf doesn't give several pages of results, but it listed depth 24 as best depth for mae and rmse and 0.001 as the optimal complexity parameter. Let's test it
+
+## Test 3: Hyperparameter tuned test
+```{r}
+tree3 <- rpart(price ~ ., data = train2, method = "anova", control = c(maxdepth = 24, cp = 0.001))
+rpart.plot(tree3)
+```
+
+## Feature Importance
+```{r}
+vip(tree3)
+```
+
+## Accuracy test
+```{r}
+predicted_values <- predict(tree3, train2)
+mae(predicted_values, train2$price)
+rmse(predicted_values, train2$price)
+```
+### This is the same tree as before. Let's use it
+
+# Predict the test data
+
+## Prediction time!
+```{r}
+test$price <- predict(tree3, test, na.action = na.exclude)
+write.csv(test, "test_final.csv")
+
+submission <- test %>% select("id", "price")
+
+write.csv(submission, "Spring23_ds_capstone_submission.csv", row.names=FALSE)
+```

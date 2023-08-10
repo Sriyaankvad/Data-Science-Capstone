@@ -1,0 +1,121 @@
+---
+title: "Assignment 3"
+author: "Sriyaank Vadlamani"
+date: "2023-03-24"
+output: pdf_document
+---
+
+```{r echo=FALSE}
+# install.packages("rpart")
+# install.packages("geosphere")
+# install.packages("dplyr")
+# install.packages("rpart.plot")
+# install.packages("stringr")
+# install.packages("moderndive")
+```
+
+```{r}
+library(rpart)
+library(geosphere)
+library(dplyr)
+library(rpart.plot)
+library(stringr)
+library(moderndive)
+```
+
+```{r}
+set.seed(32523)
+```
+
+# Datasets
+```{r}
+train <- read.csv("train_data.csv")
+test <- read.csv("test_data.csv")
+
+train <- na.omit(train)
+test <- na.omit(test)
+```
+
+# Getting Variables Ready
+
+## Adding Distance from JDF and Distance from Broadway columns
+```{r}
+jfk <- matrix(c( -73.7781, 40.6413), nrow=1) # uses latitude and longitude of JFK airport
+broadway <- matrix(c(-73.9747, 40.7908), nrow=1) # uses latitude and longitude of broadway
+
+# The distances are divided by 1000 to avoid scientific notation on decision tree
+train$distance_jfk <- distGeo(jfk, matrix(c(train$longitude, train$latitude), ncol=2)) / 1000 
+test$distance_jfk <- distGeo(jfk, matrix(c(test$longitude, test$latitude), ncol=2)) / 1000
+
+train$distance_broadway <- distGeo(broadway, matrix(c(train$longitude, train$latitude), ncol=2)) / 1000
+test$distance_broadway <- distGeo(broadway, matrix(c(test$longitude, test$latitude), ncol=2))/ 1000
+```
+
+## Adding has_crime column
+```{r}
+crime_data <- read.csv("NYC_Crime_Statistics.csv")
+crime_dict <- with(crime_data, setNames(Zip.Codes, TOTAL.SEVEN.MAJOR.FELONY.OFFENSES))
+
+train$zipcode <- str_sub(train$Location, -20, -16)
+train$zipcode <- as.integer(train$zipcode)
+
+train$has_crime <- ifelse(any(crime_data == train$zipcode), TRUE, FALSE)
+
+train$has_crime <- train$zipcode %in% crime_data$Zip.Codes
+```
+
+# Making Decision Trees
+
+## Test #1: Initial Test
+```{r}
+train1 <- train %>% select(neighbourhood_group, room_type, distance_jfk, distance_broadway, has_crime, price)
+fit1 <- rpart(price ~ ., data = train1, method = "anova")
+fit1
+```
+
+```{r}
+rpart.plot(fit1)
+```
+
+## Test #2: More variables
+
+```{r}
+train2 <- train %>% select(neighbourhood_group, room_type, distance_jfk, minimum_nights, number_of_reviews, noise.dB., reviews_per_month, has_crime, price)
+fit2 <- rpart(price ~ ., data = train2, method = "anova")
+fit2
+```
+
+```{r}
+rpart.plot(fit2)
+```
+## Test #3: Final test, more cleaned up
+
+```{r}
+train3 <- rep_sample_n(train, size=7703, replace = FALSE) # Using sample of same size as test dataset to allow the model to be used for predicting
+fit3 <- rpart(price ~ room_type + noise.dB. + neighbourhood_group + has_crime,data = train3, method = "anova")
+fit3
+```
+
+```{r}
+rpart.plot(fit3)
+```
+
+# Predict the test data
+
+## Add has_crime to test
+```{r}
+crime_data <- read.csv("NYC_Crime_Statistics.csv")
+crime_dict <- with(crime_data, setNames(Zip.Codes, TOTAL.SEVEN.MAJOR.FELONY.OFFENSES))
+
+test$zipcode <- str_sub(test$Location, -20, -16)
+test$zipcode <- as.integer(test$zipcode)
+
+test$has_crime <- ifelse(any(crime_data == test$zipcode), TRUE, FALSE)
+
+test$has_crime <- test$zipcode %in% crime_data$Zip.Codes
+```
+
+## Prediction time!
+```{r}
+test$price <- predict(fit3)
+```
